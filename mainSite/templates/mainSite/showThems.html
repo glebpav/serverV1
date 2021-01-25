@@ -22,63 +22,70 @@
             src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js"
             integrity="sha384-OgVRvuATP1z7JjHLkuOU7Xw704+h835Lr+6QL9UvYjZE3Ipu6Tp75j7Bh/kR0JKI"
             crossorigin="anonymous"></script>
+
+
 </head>
 <body>
 
-<nav class="navbar sticky-top navbar-dark bg-primary">
-    <div class="">
-        <div class="row d-flex justify-content-center">
-            <div class="col-sm text-center">
-                <form action="/">
-                    <button class="btn  btn-lg btn-light" role="button" aria-pressed="true">назад</button>
-                </form>
-            </div>
-            <div class="col-sm container">
-                <div class="text-center">
-                    <h1 class="text-white"> {{theme}}</h1>
-                </div>
-            </div>
+<nav class="navbar fixed-top navbar-dark bg-primary">
+    <div class="row">
+        <div class="col-sm d-flex justify-content-center">
+            <form action="/">
+                <button class="btn  btn-lg btn-light" role="button" aria-pressed="true" align="center">назад</button>
+            </form>
+        </div>
+        <div class="col-sm ">
+            <h1 class=" navbar-brand text-white display-3 text-center" style=" font-size: 1.5rem;"> {{theme}}</h1>
         </div>
     </div>
 </nav>
 
-<div class="">
-    <br><br>
-    <div class="container">
-        <div>
-            {%for element in message %}
-            <div class="card h-100">
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-sm-1 text-center">
-                            <h3>{{element.counter}}</h3>
-                        </div>
-                        <div class="col-sm-11">
-                            <div class="text">
-                                <h5 class="card-title text-center">{{element.title}}</h5>
-                                <p> {{element.description}} </p>
-                            </div>
+<br><br><br>
+<br><br><br>
+
+
+<div class="container">
+    <div class="row text-center">
+
+        {%for element in message %}
+        <div class="col-lg-6 col-md-6" style="margin-bottom:2.3%">
+
+                <div class="card border-{{element.typeBox}} h-100" >
+                    <div class="card-header">
+                        <h5 class="card-title text-center display-3" style=" font-size: 1.8rem;">
+                            {{element.title}}</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="">
+                            <p class="card " style="font-size:1.3rem"> {{element.description}} </p>
+                            <h5 class="card-title display-3" style=" font-size: 1.3rem; margin-top:40px">
+                                {{element.toneTitle}}</h5>
+                            <h5 class="card-title display-3" style=" font-size: 1.3rem;">
+                                {{element.toneDescription}}</h5>
+                            <h5 class="card-title display-3" style=" font-size: 1.3rem;">{{element.toneAll}}</h5>
+                            <h5 class="card-title display-3" style=" font-size: 1.3rem;">{{element.toneAve}}</h5>
+                            <h5 class="card-title display-3" style=" font-size: 1.3rem;">
+                                {{element.toneAveBest}}</h5>
+                            <h3 class="display-3" style="font-size: 1.3rem; margin-top:40px">
+                                {{element.counter}}</h3>
                         </div>
                     </div>
-                    <br>
-                    <br>
-                    <p> {{element.toneTitle}} </p>
-                    <p> {{element.toneDescription}} </p>
-                    <p> {{element.toneAll}} </p>
-                    <p> {{element.toneAve}} </p>
-                    <p> {{element.toneAveBest}} </p>
 
-                </div>
-                <div class="card-footer">
-                    <form action=" {{element.url}}" target="_blank">
-                        <button class="btn btn-lg btn-block btn-outline-primary" type="submit">перейти</button>
-                    </form>
+                    <div class="card-footer">
+                        <form action=" {{element.url}}" target="_blank">
+                            <div class="d-flex justify-content-center">
+                                <button class="btn btn-lg btn-block btn-outline-{{element.typeBox}}" type="submit">
+                                    перейти
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             </div>
-            <br>
-            {%endfor%}
-        </div>
+        {%endfor%}
+
     </div>
+    <br>
     <br> <br>
 
     <div class="navbar navbar-default navbar-fixed-bottom">
