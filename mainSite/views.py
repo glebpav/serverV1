@@ -1,4 +1,5 @@
-import requests
+""" ----------------------  imports  ---------------------------- """
+
 import tflearn
 import tensorflow as tf
 import numpy as np
@@ -8,21 +9,28 @@ from langdetect import detect
 from nltk.stem.snowball import RussianStemmer
 from nltk.tokenize import TweetTokenizer
 from collections import Counter
-from googleapi import google
 from django.shortcuts import render
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.generics import get_object_or_404
 from GoogleNews import GoogleNews
+from pygooglenews import GoogleNews as GN
+from .parser import *
 
 from .serializers import *
 from .models import *
 
-VOCAB_SIZE = 6500
-weight_of_words = 0.15
-num_page = 1
+""" ----------------------  some settings  ---------------------------- """
 
-sites = {"лента ру", "рбк", "риа", "медуза"}
+VOCAB_SIZE = 6500
+WEIGHT_OF_UNKNOWN_WORDS = 0.15
+INFLUENCE_OF_DESCRIPTION = 0.68
+WEIGHT_OF_THE_WORSE_WORDS = 0.50  # этот коэффициент уменьшает конечную тональность на заданную долю
+PAGE_NUM = 1  # количество страниц затрагиваемых при поиске новостей
+
+sites = {"лента ру", "рбк", "риа", "медуза"}  # список новостных ресурсов
+
+""" ----------------------- initialising variables -------------------- """
 
 stemer = RussianStemmer()
 regex = re.compile('[^а-яА-Я ]')
@@ -48,13 +56,12 @@ for word in word_tone:
     word_token.update(dict)
 
 for word in badWordsVocab:
-    badWordsDict.update({word:word})
+    badWordsDict.update({word: word})
 
 f.close()
 f1.close()
 fileBadWords.close()
 
-print(badWordsDict)
 
 def build_model(learning_rate=0.1):
     tf.reset_default_graph()
@@ -68,6 +75,7 @@ def build_model(learning_rate=0.1):
         learning_rate=learning_rate,
         loss='categorical_crossentropy')
     model = tflearn.DNN(net)
+    model.load("model")
     return model
 
 
@@ -111,7 +119,7 @@ def test_article_better(title, description):
     title_positive_prob = model.predict([title_vector])[0][1]
     description_positive_prob = model.predict([description_vector])[0][1]
 
-    positive_prob = (title_positive_prob + description_positive_prob) / 2
+    positive_prob = modify_probe(probe_from_title=title_positive_prob, probe_from_desc=description_positive_prob)
 
     if 0.35 < positive_prob < 0.66:
         return "нейтрально"
@@ -122,20 +130,27 @@ def test_article_better(title, description):
 
 
 def multiple_answer(tone_from_nn, tone_from_unknown_words):
-    return tone_from_nn * (1 - weight_of_words) + tone_from_unknown_words * weight_of_words
+    return tone_from_nn * (1 - WEIGHT_OF_UNKNOWN_WORDS) + tone_from_unknown_words * WEIGHT_OF_UNKNOWN_WORDS
+
+
+def modify_probe(probe_from_title, probe_from_desc):
+    return probe_from_title * (1 - INFLUENCE_OF_DESCRIPTION) + probe_from_desc * INFLUENCE_OF_DESCRIPTION
 
 
 def article_to_vector_clearly(article, count_unknowns=True):
     vector = np.zeros(VOCAB_SIZE, dtype=np.int_)
     unknown_word_count = 0
     unknown_word_sum = 0
+    badWordsCounter = 0
+
     for token in tokenizer.tokenize(article):
         stem = get_stem(token)
         badWord = badWordsDict.get(stem, None)
         idx = token_2_idx.get(stem, None)
 
         if badWord is not None:
-            print(badWord)
+            # print(badWord)
+            badWordsCounter += 1
 
         if idx is not None:
             vector[idx] = 1
@@ -149,9 +164,11 @@ def article_to_vector_clearly(article, count_unknowns=True):
                     unknown_word_sum += 1
                 elif tone == 'NGTV':
                     unknown_word_sum += 0
+
+    # print(badWordsCounter)
     if unknown_word_count == 0:
-        return [vector, None]
-    return [vector, unknown_word_sum / unknown_word_count]
+        return [vector, None, badWordsCounter]
+    return [vector, unknown_word_sum / unknown_word_count, badWordsCounter]
 
 
 def test_article_the_best(title, description):
@@ -159,18 +176,45 @@ def test_article_the_best(title, description):
     description_vector = article_to_vector_clearly(description, True)
     title_positive_prob = model.predict([title_vector[0]])[0][1]
     description_positive_prob = model.predict([description_vector[0]])[0][1]
-    #print(title_positive_prob)
-    positive_prob = (title_positive_prob + description_positive_prob) / 2
+    # print(title_positive_prob)
+
+    positive_prob = modify_probe(probe_from_title=title_positive_prob, probe_from_desc=description_positive_prob)
 
     if title_vector[1] is not None and description_vector[1] is not None:
-        positive_prob = multiple_answer((title_positive_prob + description_positive_prob) / 2,
-                                        (title_vector[1] + description_vector[1]) / 2)
+        positive_prob = multiple_answer(positive_prob, (title_vector[1] + description_vector[1]) / 2)
     elif title_vector[1] is not None and description_vector[1] is None:
-        positive_prob = multiple_answer((title_positive_prob + description_positive_prob) / 2,
-                                        (title_vector[1]) / 2)
+        positive_prob = multiple_answer(positive_prob, (title_vector[1]) / 2)
     elif title_vector[1] is None and description_vector[1] is not None:
-        positive_prob = multiple_answer((title_positive_prob + description_positive_prob) / 2,
-                                        (description_vector[1]) / 2)
+        positive_prob = multiple_answer(positive_prob, (description_vector[1]) / 2)
+
+    if 0.35 < positive_prob < 0.66:
+        return ["нейтрально", "info"]
+    elif positive_prob > 0.65:
+        return ["позитивно  " , "success"]
+    else:
+        return ["негативно  " , "danger"]
+
+
+def test_article_the_best_modern(title, description):
+    title_vector = article_to_vector_clearly(title, True)
+    description_vector = article_to_vector_clearly(description, True)
+    title_positive_prob = model.predict([title_vector[0]])[0][1]
+    description_positive_prob = model.predict([description_vector[0]])[0][1]
+    # print(title_positive_prob)
+    # print(title_vector[2])
+
+    positive_prob = modify_probe(probe_from_title=title_positive_prob, probe_from_desc=description_positive_prob)
+
+    if title_vector[2] > 0:
+        positive_prob = positive_prob * (1 - WEIGHT_OF_THE_WORSE_WORDS)
+        # print("applied OK")
+
+    if title_vector[1] is not None and description_vector[1] is not None:
+        positive_prob = multiple_answer(positive_prob, (title_vector[1] + description_vector[1]) / 2)
+    elif title_vector[1] is not None and description_vector[1] is None:
+        positive_prob = multiple_answer(positive_prob, (title_vector[1]) / 2)
+    elif title_vector[1] is None and description_vector[1] is not None:
+        positive_prob = multiple_answer(positive_prob, (description_vector[1]) / 2)
 
     if 0.35 < positive_prob < 0.66:
         return ["нейтрально", "info"]
@@ -186,20 +230,16 @@ def test_article_the_best_api(title, description):
     title_positive_prob = model.predict([title_vector[0]])[0][1]
     description_positive_prob = model.predict([description_vector[0]])[0][1]
 
-    positive_prob = (title_positive_prob + description_positive_prob) / 2
+    positive_prob = modify_probe(probe_from_title=title_positive_prob, probe_from_desc=description_positive_prob)
 
     if title_vector[1] is not None and description_vector[1] is not None:
-        positive_prob = multiple_answer((title_positive_prob + description_positive_prob) / 2,
-                                        (title_vector[1] + description_vector[1]) / 2)
+        positive_prob = multiple_answer(positive_prob, (title_vector[1] + description_vector[1]) / 2)
     elif title_vector[1] is not None and description_vector[1] is None:
-        positive_prob = multiple_answer((title_positive_prob + description_positive_prob) / 2,
-                                        (title_vector[1]) / 2)
+        positive_prob = multiple_answer(positive_prob, (title_vector[1]) / 2)
     elif title_vector[1] is None and description_vector[1] is not None:
-        positive_prob = multiple_answer((title_positive_prob + description_positive_prob) / 2,
-                                        (description_vector[1]) / 2)
+        positive_prob = multiple_answer(positive_prob, (description_vector[1]) / 2)
 
     return positive_prob
-
 
 
 model = build_model(learning_rate=0.75)
@@ -227,18 +267,27 @@ def find(request):
                     all_of_article = [result["title"] + result["desc"]]
                     media = result["media"]
 
-                    if media != "Lenta" and media != "РИА Новости" and media != "РБК" and media != "Meduza":
-                        continue;
+                    if media != "Lenta" and media != "РИА Новости" and media != "РБК" and media != "Meduza": continue
 
-                    #print(media)
+                    if request.GET.get('q') is None:
+                        if media == "Lenta":
+                            parseLenta(result["link"])
+
+                    flagToBreak = False
+                    for item in dataa:
+                        if title_of_article[0] == item["title"]:
+                            flagToBreak = True
+                            break
+                    if flagToBreak: continue
 
                     tone = test_tweet(str(title_of_article))
                     tone2 = test_tweet(str(description_of_article))
                     tone3 = test_tweet(str(all_of_article))
                     tone4 = test_article_better(str(title_of_article), str(description_of_article))
                     tone5 = test_article_the_best(str(title_of_article), str(description_of_article))
+                    tone6 = test_article_the_best_modern(str(title_of_article), str(description_of_article))
 
-                    if detect(result["desc"]) == 'ru' and request.GET.get('q'):
+                    if detect(result["desc"]) == 'ru' and request.GET.get('q') or not request.GET.get('q'):
                         just_counter += 1
                         dataa.append({"title": title_of_article[0], "description": description_of_article[0],
                                       "url": result["link"],
@@ -247,17 +296,7 @@ def find(request):
                                       "toneAll": ("в общем : " + tone3),
                                       "toneAve": ("тональность : " + tone4),
                                       "toneAveBest": ("тональность : " + tone5[0]),
-                                      "typeBox": (tone5[1]),
-                                      "counter": just_counter})
-                    elif not request.GET.get('q'):
-                        just_counter += 1
-                        dataa.append({"title": title_of_article[0], "description": description_of_article[0],
-                                      "url": result["link"],
-                                      "toneTitle": ("заголовок : " + tone),
-                                      "toneDescription": ("описание : " + tone2),
-                                      "toneAll": ("в общем : " + tone3),
-                                      "toneAve": ("тональность : " + tone4),
-                                      "toneAveBest": ("тональность : " + tone5[0]),
+                                      "toneWithBadWordsAveBest": ("тон с ПС: " + tone6[0]),
                                       "typeBox": (tone5[1]),
                                       "counter": just_counter})
                 except Exception:
@@ -270,6 +309,42 @@ def find(request):
         return render(request, "mainSite/showThems.html", context=data)
 
 
+class Top_News_view(APIView):
+
+    def get(self, request):
+
+        news = []
+
+        gn = GN(lang = 'ru')
+        top = gn.top_news()
+        for toper in top["entries"]:
+            print(toper["title"])
+            print((list(toper["links"])[0])["href"])
+            print()
+
+            item = News()
+
+            description_of_article = [toper["title"]]
+            title_of_article = [toper["title"]]
+
+            """tone = test_tweet(str(title_of_article))
+            tone2 = test_tweet(str(description_of_article))
+            tone3 = test_tweet(str(all_of_article))
+            tone4 = test_article_better(str(title_of_article), str(description_of_article))"""
+            tone5 = test_article_the_best_api(str(title_of_article), str(description_of_article))
+
+            item.title = title_of_article[0]
+            item.body = description_of_article[0]
+            item.url = (list(toper["links"])[0])["href"]
+            item.rating = tone5
+
+            news.append(item)
+
+        serializer = NewsSerializer(news, many=True)
+        return Response({"status":"ok","news": serializer.data})
+
+
+
 def hello(request):
     return render(request, 'mainSite/index.html', context={})
 
@@ -277,25 +352,31 @@ def hello(request):
 class News_view(APIView):
 
     def get(self, request, theme):
+
         news = []
+        googlenews = GoogleNews(lang='ru')
+
         for site in sites:
 
-            googlenews.clear()
-            googlenews = GoogleNews(lang='ru')
             googlenews.search(theme + " " + site)
+            googlenews.get_page(1)
 
-            for result in googlenews.get_page(1):
+            for result in googlenews.results():
                 item = News()
 
                 description_of_article = [result["desc"]]
                 title_of_article = [result["title"]]
                 media = result["media"]
-                #print(media)
 
-                """tone = test_tweet(str(title_of_article))
-                tone2 = test_tweet(str(description_of_article))
-                tone3 = test_tweet(str(all_of_article))
-                tone4 = test_article_better(str(title_of_article), str(description_of_article))"""
+                if media != "Lenta" and media != "РИА Новости" and media != "РБК" and media != "Meduza": continue
+
+                """flagToBreak = False
+                for item in dataa:
+                    if title_of_article[0] == item["title"]:
+                        flagToBreak = True
+                        break
+                if flagToBreak: continue"""
+
                 tone5 = test_article_the_best_api(str(title_of_article), str(description_of_article))
 
                 item.title = title_of_article[0]
@@ -303,20 +384,18 @@ class News_view(APIView):
                 item.url = result["link"]
                 item.rating = tone5
 
-
-
                 news.append(item)
 
-        serializer = NewsSerializer(news, many=True)
-        return Response({"status":"ok","news": serializer.data})
+            serializer = NewsSerializer(news, many=True)
+            return Response({"status": "ok", "news": serializer.data})
 
-    def post(self, request):
-        article = request.data.get('article')
-        # Create an article from the above data
-        serializer = NewsSerializer(data=article)
-        if serializer.is_valid(raise_exception=True):
-            article_saved = serializer.save()
-        return Response({"success": "Article '{}' created successfully".format(article_saved.title)})
+        def post(self, request):
+            article = request.data.get('article')
+            # Create an article from the above data
+            serializer = NewsSerializer(data=article)
+            if serializer.is_valid(raise_exception=True):
+                article_saved = serializer.save()
+            return Response({"success": "Article '{}' created successfully".format(article_saved.title)})
 
 
 class User_check(APIView):
@@ -330,12 +409,12 @@ class User_check(APIView):
                 found_user_with_login = True
                 if user.password == checking_user["password"]:
                     serializer = UserSerializer(user)
-                    return Response({"status":"ok","user": serializer.data})
+                    return Response({"status": "ok", "user": serializer.data})
 
         if found_user_with_login:
-            return Response({"status":"bad request","trouble": "password is incorrect"})
+            return Response({"status": "bad request", "trouble": "password is incorrect"})
         else:
-            return Response({"status":"bad request","trouble": "no user with such login"})
+            return Response({"status": "bad request", "trouble": "no user with such login"})
 
 
 class User_view(APIView):
@@ -364,7 +443,7 @@ class User_view(APIView):
         if serializer.is_valid(raise_exception=True):
             user_saved = serializer.save()
         return Response({
-            "status":"ok","user": serializer.data
+            "status": "ok", "user": serializer.data
         })
 
     def delete(self, request, pk):
